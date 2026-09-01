@@ -3,7 +3,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import morgan from "morgan";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
+import { rateLimit } from "express-rate-limit";
 import path from "path";
 import { AppError } from "./utils/AppError.js";
 import { errorHandler } from "./middlewares/errorMiddleware.js";
@@ -15,13 +15,13 @@ import petSlugRoutes from "./routes/petSlugRoutes.js";
 const app: Application = express();
 
 // 1. Security HTTP Headers (Configured to allow local uploads serving)
+// 1. Security HTTP Headers
 app.use(
-  helmet({
+  (helmet as any).default({
     crossOriginResourcePolicy: { policy: "cross-origin" },
     crossOriginEmbedderPolicy: false,
   })
 );
-
 // 2. HTTP Request Logger
 if (process.env.NODE_ENV === "development") {
   app.use(morgan("dev"));
