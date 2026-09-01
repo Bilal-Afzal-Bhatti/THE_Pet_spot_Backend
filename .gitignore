@@ -1,0 +1,48 @@
+# =================( DEPENDENCIES )=================
+node_modules/
+**/node_modules/
+
+# =================( ENVIRONMENT VARIABLES )=================
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
+# =================( BUILD OUTPUTS & CACHES )=================
+dist/
+build/
+.next/
+out/
+.turbo/
+.cache/
+**/dist/
+**/build/
+**/output/
+
+# =================( LOGS & DEBUG FILES )=================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# =================( OS GENERATED FILES )=================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# =================( IDE & EDITOR FILES )=================
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
