@@ -4,6 +4,8 @@ node_modules/
 
 # =================( ENVIRONMENT VARIABLES )=================
 .env
+.env.*.local
+.env.local
 .env.local
 .env.*.local
 backend/.env
@@ -46,3 +48,5 @@ Thumbs.db
 *.sln
 *.swp
 *.swo
+.vercel
+.env*
