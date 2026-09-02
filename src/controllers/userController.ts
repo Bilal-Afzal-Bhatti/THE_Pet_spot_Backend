@@ -140,6 +140,64 @@ export const getMe = asyncHandler(async (req: Request, res: Response) => {
 
 // 6. Update Profile
 // 5. Update Profile (Supports Name, Email, and Avatar Upload)
+// export const updateProfile = asyncHandler(async (req: Request, res: Response) => {
+//   const authenticatedReq = req as AuthenticatedRequest;
+//   const { name, email } = req.body;
+//   const user = await User.findById(authenticatedReq.user!._id);
+
+//   if (!user) {
+//     throw new AppError("User not found", 404);
+//   }
+
+//   // Update name if provided
+//   if (name) {
+//     user.name = name;
+//   }
+
+//   // Handle avatar upload (works for new uploads or updates)
+//   if (authenticatedReq.file) {
+//     user.avatar = `/uploads/${authenticatedReq.file.filename}`;
+//   }
+
+//   // Handle email update logic
+//   let isEmailUpdated = false;
+//   if (email && email !== user.email) {
+//     const existingEmailUser = await User.findOne({ email });
+//     if (existingEmailUser) {
+//       throw new AppError("This email address is already in use by another account", 400);
+//     }
+
+//     user.email = email;
+//     user.isVerified = false;
+
+//     const otp = Math.floor(100000 + Math.random() * 900000).toString();
+//     user.otp = otp;
+//     user.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+//     await sendOtpEvent({
+//       id: user._id.toString(),
+//       name: user.name,
+//       email: user.email,
+//       otp,
+//       type: "SEND_OTP",
+//     });
+
+//     isEmailUpdated = true;
+//   }
+
+//   await user.save();
+
+//   res.status(200).json({
+//     status: "success",
+//     message: isEmailUpdated
+//       ? "Profile updated. Please verify your new email with the OTP sent."
+//       : "Profile updated successfully",
+//     user,
+//     emailChanged: isEmailUpdated,
+//   });
+// });
+import { uploadFile } from "../utils/uploadFile.js"; // adjust path as needed
+
 export const updateProfile = asyncHandler(async (req: Request, res: Response) => {
   const authenticatedReq = req as AuthenticatedRequest;
   const { name, email } = req.body;
@@ -149,17 +207,15 @@ export const updateProfile = asyncHandler(async (req: Request, res: Response) =>
     throw new AppError("User not found", 404);
   }
 
-  // Update name if provided
   if (name) {
     user.name = name;
   }
 
   // Handle avatar upload (works for new uploads or updates)
   if (authenticatedReq.file) {
-    user.avatar = `/uploads/${authenticatedReq.file.filename}`;
+    user.avatar = await uploadFile(authenticatedReq.file, "avatars");
   }
 
-  // Handle email update logic
   let isEmailUpdated = false;
   if (email && email !== user.email) {
     const existingEmailUser = await User.findOne({ email });
