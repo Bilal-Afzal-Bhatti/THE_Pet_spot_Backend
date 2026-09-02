@@ -1,4 +1,4 @@
-import type  { Request, Response } from "express";
+import type { Request, Response } from "express";
 import Stripe from "stripe";
 
 // Helper function to get initialized Stripe instance safely
@@ -8,9 +8,10 @@ const getStripe = () => {
     throw new Error("STRIPE_SECRET_KEY is missing from environment variables.");
   }
   return new (Stripe as any)(secretKey, {
-    apiVersion: '2023-10-16', // Use a stable version string
+    apiVersion: '2023-10-16',
   });
 };
+
 // Idempotency cache storage (Use Redis in production)
 const idempotencyCache = new Map<string, any>();
 
@@ -57,22 +58,26 @@ export const createCheckoutOrder = async (req: Request<{}, {}, CheckoutRequestBo
       };
     } else {
       const stripeInstance = getStripe();
+      
+      // ✅ Fallback to production frontend URL if process.env.CLIENT_URL is missing
+      const frontendUrl = process.env.CLIENT_URL || "https://the-pet-spot-pink.vercel.app";
+
       const session = await stripeInstance.checkout.sessions.create(
         {
           payment_method_types: ["card"],
           line_items: [
             {
               price_data: {
-                currency: "inr",
+                currency: "inr", // Ensure this matches your currency configuration (e.g., inr or usd)
                 product_data: { name: title },
-                unit_amount: price * 100, // Stripe expects subunit values
+                unit_amount: Math.round(price * 100), // Ensures subunit integer value
               },
               quantity: 1,
             },
           ],
           mode: "payment",
-          success_url: `${process.env.FRONTEND_URL}/orders/success?session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${process.env.FRONTEND_URL}/pets/${petId}`,
+          success_url: `${frontendUrl}/orders/success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${frontendUrl}/pets/${petId}`,
           metadata: { petId, customerName: customerInfo.fullName },
         },
         {
@@ -91,6 +96,7 @@ export const createCheckoutOrder = async (req: Request<{}, {}, CheckoutRequestBo
     return res.status(200).json(responsePayload);
   } catch (error: any) {
     console.error("Checkout Controller Error:", error.message);
+    // ✅ Send explicit error message back for easier debugging
     return res.status(500).json({ success: false, message: error.message || "Internal server error" });
   }
 };
