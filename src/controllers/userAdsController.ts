@@ -1,9 +1,7 @@
 import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import UserAd from '../models/userAdsModel.js';
-import { put } from "@vercel/blob";
 import { uploadFiles } from "../utils/uploadFile.js";
-
 
 // Helper to safely extend Express Request with user property
 interface AuthenticatedRequest extends Request {
@@ -12,18 +10,6 @@ interface AuthenticatedRequest extends Request {
   };
 }
 
-
-const uploadImagesToBlob = async (files: Express.Multer.File[]): Promise<string[]> => {
-  const uploads = files.map(async (file) => {
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    const blob = await put(`ads/${uniqueSuffix}-${file.originalname}`, file.buffer, {
-      access: "public",
-      contentType: file.mimetype,
-    });
-    return blob.url; // a real, permanent HTTPS URL
-  });
-  return Promise.all(uploads);
-};
 const normalizeParam = (value: string | string[] | undefined): string | undefined => {
   if (Array.isArray(value)) {
     return value[0];
@@ -41,11 +27,11 @@ export const createUserAd = async (req: AuthenticatedRequest, res: Response): Pr
     }
 
     const body = req.body;
-// in createUserAd:
-const imageFiles = req.files as Express.Multer.File[];
-const images = imageFiles && imageFiles.length > 0 ? await uploadFiles(imageFiles, "ads") : [];
 
-
+    // Handles multiple uploaded images in one request (req.files, plural —
+    // requires upload.array("images", N) on this route's multer middleware)
+    const imageFiles = req.files as Express.Multer.File[];
+    const images = imageFiles && imageFiles.length > 0 ? await uploadFiles(imageFiles, "ads") : [];
 
     let suitableForArr: string[] = [];
     if (typeof body.suitableFor === 'string') {
@@ -71,7 +57,6 @@ const images = imageFiles && imageFiles.length > 0 ? await uploadFiles(imageFile
       vaccinated: body.vaccinated === 'true' || body.vaccinated === true,
       kcpRegistered: body.kcpRegistered === 'true' || body.kcpRegistered === true,
       description: body.description,
-    
       city: body.city || body.location,
       price: Number(body.price),
       contactNumber: body.contactNumber,
@@ -106,10 +91,30 @@ export const updateUserAd = async (req: AuthenticatedRequest, res: Response): Pr
     const body = req.body;
     const imageFiles = req.files as Express.Multer.File[];
 
-   // in updateUserAd:
-if (imageFiles && imageFiles.length > 0) {
-  ad.images = await uploadFiles(imageFiles, "ads");
-}
+    // 1. Optionally remove specific existing images.
+    // Frontend sends: removedImages: JSON.stringify(["https://...url1", "https://...url2"])
+    // for whichever existing images the user unchecked/removed in the edit UI.
+    if (body.removedImages) {
+      let removedArr: string[] = [];
+      try {
+        removedArr = typeof body.removedImages === 'string'
+          ? JSON.parse(body.removedImages)
+          : body.removedImages;
+      } catch {
+        removedArr = [];
+      }
+      if (Array.isArray(removedArr) && removedArr.length > 0) {
+        ad.images = (ad.images || []).filter((img) => !removedArr.includes(img));
+      }
+    }
+
+    // 2. Append any newly uploaded images to whatever remains, instead of
+    // overwriting the whole array (this was the original bug — new uploads
+    // used to replace all existing images).
+    if (imageFiles && imageFiles.length > 0) {
+      const newImageUrls = await uploadFiles(imageFiles, "ads");
+      ad.images = [...(ad.images || []), ...newImageUrls];
+    }
 
     if (body.suitableFor) {
       let suitableForArr: string[] = [];
@@ -229,6 +234,7 @@ export const getApprovedUserAdsByCategory = async (req: Request, res: Response):
     res.status(500).json({ message: error.message || 'Failed to fetch approved ads' });
   }
 };
+
 // Get single approved ad by ID
 export const getApprovedUserAdById = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -242,7 +248,7 @@ export const getApprovedUserAdById = async (req: Request, res: Response): Promis
     const ad = await UserAd.findOne({
       _id: new mongoose.Types.ObjectId(idParam),
       isApproved: 'approved',
-    }).populate('user', 'name email avatar'); // <--- Added populate to fetch user details
+    }).populate('user', 'name email avatar');
 
     if (!ad) {
       res.status(404).json({ message: 'Ad not found' });
