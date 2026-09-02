@@ -156,8 +156,15 @@ export const verifyAndCompleteOrder = async (req: Request, res: Response): Promi
 
     if (session.payment_status === "paid") {
       // Find and update order status to PAID
+      const orderFilter: any = {
+        $or: [
+          { stripeSessionId: session.id },
+          ...(typeof orderId === "string" ? [{ orderId }] : []),
+        ],
+      };
+
       const updatedOrder = await Order.findOneAndUpdate(
-        { $or: [{ stripeSessionId: session.id }, { orderId }] },
+        orderFilter,
         { 
           paymentStatus: "PAID", 
           orderStatus: "CONFIRMED" 
