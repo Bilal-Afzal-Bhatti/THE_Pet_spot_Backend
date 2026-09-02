@@ -21,7 +21,13 @@ const app: Application = express();
 //     crossOriginEmbedderPolicy: false,
 //   })
 // );
-
+// 5.5. Root welcome route
+app.get("/", (_req: Request, res: Response) => {
+  res.status(200).json({
+    status: "Success",
+    message: "Welcome to ThePetSpot API Server!",
+  });
+});
 // 2. HTTP Request Logger
 if (process.env.NODE_ENV === "development") {
   app.use(morgan("dev"));
