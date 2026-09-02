@@ -11,13 +11,6 @@ const getStripe = () => {
 
 const idempotencyCache = new Map<string, any>();
 
-// ✅ Unique Order ID generator combining timestamp and Math.random
-const generateUniqueOrderId = (): string => {
-  const timestamp = Date.now().toString(36).toUpperCase();
-  const randomStr = Math.random().toString(36).substring(2, 8).toUpperCase();
-  return `ORD-${timestamp}-${randomStr}`;
-};
-
 interface CheckoutRequestBody {
   petId: string;
   title: string;
@@ -53,35 +46,46 @@ export const createCheckoutOrder = async (
       return res.status(400).json({ success: false, message: "Invalid payload details." });
     }
 
-    // ✅ Generate order ID upfront to guarantee it's never null
-    const orderId = generateUniqueOrderId();
-    if (!orderId) {
-      return res.status(500).json({ success: false, message: "Failed to generate order ID." });
-    }
-
     let responsePayload: any;
 
     if (customerInfo.paymentMethod === "COD") {
-      const order = await Order.create({
-        orderId,
-        petId,
-        title,
-        price,
-        petImage: petImage || "",
-        idempotencyKey,
-        customerInfo,
-        paymentStatus: "PENDING",
-        orderStatus: "PROCESSING",
-      });
+      try {
+        // 👈 orderId is omitted here; Mongoose model default & pre-save hook handles it
+        const order = await Order.create({
+          petId,
+          title,
+          price,
+          petImage: petImage || "",
+          idempotencyKey,
+          customerInfo,
+          paymentStatus: "PENDING",
+          orderStatus: "PROCESSING",
+        });
 
-      await sendOrderConfirmationEvent({ ...order.toObject(), _id: order._id.toString() });
+        await sendOrderConfirmationEvent({ ...order.toObject(), _id: order._id.toString() });
 
-      responsePayload = {
-        success: true,
-        message: "COD order placed successfully.",
-        orderId,
-        successUrl: `/orders/success?type=cod&orderId=${orderId}&petId=${petId}`,
-      };
+        responsePayload = {
+          success: true,
+          message: "COD order placed successfully.",
+          orderId: order.orderId,
+          successUrl: `/orders/success?type=cod&orderId=${order.orderId}&petId=${petId}`,
+        };
+      } catch (dbError: any) {
+        if (dbError.code === 11000) {
+          const existingOrder = await Order.findOne({ idempotencyKey });
+          if (existingOrder) {
+            responsePayload = {
+              success: true,
+              message: "COD order already placed.",
+              orderId: existingOrder.orderId,
+              successUrl: `/orders/success?type=cod&orderId=${existingOrder.orderId}&petId=${petId}`,
+            };
+            idempotencyCache.set(idempotencyKey, responsePayload);
+            return res.status(200).json(responsePayload);
+          }
+        }
+        throw dbError;
+      }
     } else {
       const stripeInstance = getStripe();
       const frontendUrl = process.env.CLIENT_URL || "https://the-pet-spot-pink.vercel.app";
@@ -90,7 +94,35 @@ export const createCheckoutOrder = async (
         return res.status(400).json({ success: false, message: "Customer email is required for online payment." });
       }
 
-      // Create Stripe Checkout Session
+      // Create an empty placeholder order first or pass a temporary metadata reference
+      // Let's create the order first so Mongoose populates order.orderId for Stripe metadata
+      let tempOrder;
+      try {
+        tempOrder = await Order.create({
+          petId,
+          title,
+          price,
+          petImage: petImage || "",
+          idempotencyKey,
+          customerInfo,
+          paymentStatus: "PENDING",
+          orderStatus: "PROCESSING",
+        });
+      } catch (dbError: any) {
+        if (dbError.code === 11000) {
+          const existingOrder = await Order.findOne({ idempotencyKey });
+          if (existingOrder) {
+            // If session already existed, we create/retrieve stripe session or handle accordingly
+            // For now, return existing payload
+            responsePayload = { success: true, orderId: existingOrder.orderId };
+            idempotencyCache.set(idempotencyKey, responsePayload);
+            return res.status(200).json(responsePayload);
+          }
+        }
+        throw dbError;
+      }
+
+      // Create Stripe Checkout Session using the model-generated orderId
       const session = await stripeInstance.checkout.sessions.create(
         {
           payment_method_types: ["card"],
@@ -99,7 +131,7 @@ export const createCheckoutOrder = async (
           line_items: [
             {
               price_data: {
-                currency: "inr", // Update if using a different currency
+                currency: "inr",
                 product_data: { 
                   name: title,
                   images: petImage ? [petImage] : [],
@@ -110,28 +142,18 @@ export const createCheckoutOrder = async (
             },
           ],
           mode: "payment",
-          success_url: `${frontendUrl}/orders/success?session_id={CHECKOUT_SESSION_ID}&orderId=${orderId}`,
+          success_url: `${frontendUrl}/orders/success?session_id={CHECKOUT_SESSION_ID}&orderId=${tempOrder.orderId}`,
           cancel_url: `${frontendUrl}/pets/${petId}`,
-          metadata: { petId, orderId, customerName: customerInfo.fullName },
+          metadata: { petId, orderId: tempOrder.orderId, customerName: customerInfo.fullName },
         },
         { idempotencyKey: `stripe_${idempotencyKey}` }
       );
 
-      // Save order to database with the generated orderId
-      await Order.create({
-        orderId,
-        petId,
-        title,
-        price,
-        petImage: petImage || "",
-        idempotencyKey,
-        stripeSessionId: session.id,
-        customerInfo,
-        paymentStatus: "PENDING",
-        orderStatus: "PROCESSING",
-      });
+      // Attach the stripe session ID to the already created order record
+      tempOrder.stripeSessionId = session.id;
+      await tempOrder.save();
 
-      responsePayload = { success: true, url: session.url, orderId };
+      responsePayload = { success: true, url: session.url, orderId: tempOrder.orderId };
     }
 
     idempotencyCache.set(idempotencyKey, responsePayload);
@@ -141,6 +163,7 @@ export const createCheckoutOrder = async (
     return res.status(500).json({ success: false, message: error.message || "Internal server error" });
   }
 };
+
 export const verifyAndCompleteOrder = async (req: Request, res: Response): Promise<any> => {
   try {
     const { session_id, orderId } = req.query;
@@ -158,6 +181,7 @@ export const verifyAndCompleteOrder = async (req: Request, res: Response): Promi
           { stripeSessionId: session.id },
           ...(typeof orderId === "string" ? [{ orderId }] : []),
         ],
+        paymentStatus: { $ne: "PAID" },
       };
 
       const updatedOrder = await Order.findOneAndUpdate(
@@ -169,10 +193,7 @@ export const verifyAndCompleteOrder = async (req: Request, res: Response): Promi
       if (updatedOrder) {
         console.log(`✅ [Instant Verify API] Order ${updatedOrder.orderId} successfully marked as PAID.`);
 
-        // Only send the email if this is the FIRST time we're marking it PAID —
-        // otherwise both the webhook and this endpoint could each send a duplicate email
-        // if they both fire for the same order (a real race condition risk here).
-        if (updatedOrder.paymentStatus === "PAID" && !updatedOrder.emailSent) {
+        if (!updatedOrder.emailSent) {
           await sendOrderConfirmationEvent({
             ...updatedOrder.toObject(),
             _id: updatedOrder._id.toString(),
@@ -186,6 +207,21 @@ export const verifyAndCompleteOrder = async (req: Request, res: Response): Promi
           order: updatedOrder,
         });
       } else {
+        const alreadyPaidOrder = await Order.findOne({
+          $or: [
+            { stripeSessionId: session.id },
+            ...(typeof orderId === "string" ? [{ orderId }] : []),
+          ],
+        });
+
+        if (alreadyPaidOrder && alreadyPaidOrder.paymentStatus === "PAID") {
+          return res.status(200).json({
+            success: true,
+            message: "Payment already verified previously.",
+            order: alreadyPaidOrder,
+          });
+        }
+
         console.warn(`⚠️ [Instant Verify API] Session is paid on Stripe, but order not found in DB for session: ${session.id}`);
         return res.status(404).json({ success: false, message: "Order record not found in database." });
       }
