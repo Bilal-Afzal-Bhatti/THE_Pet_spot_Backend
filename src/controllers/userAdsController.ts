@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import UserAd from '../models/userAdsModel.js';
-
+import { put } from "@vercel/blob";
 // Helper to safely extend Express Request with user property
 interface AuthenticatedRequest extends Request {
   user?: {
@@ -9,6 +9,18 @@ interface AuthenticatedRequest extends Request {
   };
 }
 
+
+const uploadImagesToBlob = async (files: Express.Multer.File[]): Promise<string[]> => {
+  const uploads = files.map(async (file) => {
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const blob = await put(`ads/${uniqueSuffix}-${file.originalname}`, file.buffer, {
+      access: "public",
+      contentType: file.mimetype,
+    });
+    return blob.url; // a real, permanent HTTPS URL
+  });
+  return Promise.all(uploads);
+};
 const normalizeParam = (value: string | string[] | undefined): string | undefined => {
   if (Array.isArray(value)) {
     return value[0];
@@ -26,8 +38,8 @@ export const createUserAd = async (req: AuthenticatedRequest, res: Response): Pr
     }
 
     const body = req.body;
-    const imageFiles = req.files as Express.Multer.File[];
-    const images = imageFiles ? imageFiles.map((file) => `/uploads/${file.filename}`) : [];
+   const imageFiles = req.files as Express.Multer.File[];
+const images = imageFiles && imageFiles.length > 0 ? await uploadImagesToBlob(imageFiles) : [];
 
     let suitableForArr: string[] = [];
     if (typeof body.suitableFor === 'string') {
@@ -88,9 +100,9 @@ export const updateUserAd = async (req: AuthenticatedRequest, res: Response): Pr
     const body = req.body;
     const imageFiles = req.files as Express.Multer.File[];
 
-    if (imageFiles && imageFiles.length > 0) {
-      ad.images = imageFiles.map((file) => `/uploads/${file.filename}`);
-    }
+   if (imageFiles && imageFiles.length > 0) {
+  ad.images = await uploadImagesToBlob(imageFiles);
+}
 
     if (body.suitableFor) {
       let suitableForArr: string[] = [];

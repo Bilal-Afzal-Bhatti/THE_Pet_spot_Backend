@@ -1,22 +1,10 @@
 import multer from "multer";
-import path from "path";
 import { AppError } from "../utils/AppError.js";
 
-// 1. Storage engine configuration
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    // Files will be stored in 'backend/uploads'
-    cb(null, "uploads/");
-  },
-  filename: (_req, file, cb) => {
-    // Generates: avatar-1724845200000-123456789.png
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    const ext = path.extname(file.originalname);
-    cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-  },
-});
+// Memory storage — files are held in RAM as a buffer, never touch disk.
+// Required for Vercel serverless, which has no persistent/writable filesystem.
+const storage = multer.memoryStorage();
 
-// 2. File type validation filter
 const fileFilter = (
   _req: any,
   file: Express.Multer.File,
@@ -29,7 +17,6 @@ const fileFilter = (
   }
 };
 
-// 3. Export configured Multer instance
 export const upload = multer({
   storage,
   fileFilter,
