@@ -1,16 +1,36 @@
 import mongoose from "mongoose";
+// Global variable to cache the connection across Vercel serverless warm starts
+let cached = global.mongoose;
+if (!cached) {
+    cached = global.mongoose = { conn: null, promise: null };
+}
 export const connectDB = async () => {
-    try {
-        const connStr = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/PetSpot";
-        console.log(`Attempting connection to: ${connStr}`);
-        const conn = await mongoose.connect(connStr, {
-            serverSelectionTimeoutMS: 5000, // Timeout fast after 5s instead of 10s
+    // Read process.env inside the function so dotenv has time to load first
+    const MONGODB_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/PetSpot";
+    if (!MONGODB_URI) {
+        throw new Error("Please define the MONGO_URI environment variable");
+    }
+    if (cached.conn) {
+        return cached.conn;
+    }
+    if (!cached.promise) {
+        const opts = {
+            serverSelectionTimeoutMS: 5000,
+            bufferCommands: false,
+        };
+        console.log(`Attempting connection to: ${MONGODB_URI}`);
+        cached.promise = mongoose.connect(MONGODB_URI, opts).then((mongooseInstance) => {
+            console.log(`✅ MongoDB Connected: ${mongooseInstance.connection.host}`);
+            return mongooseInstance;
         });
-        console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+    }
+    try {
+        cached.conn = await cached.promise;
     }
     catch (error) {
+        cached.promise = null;
         console.error("❌ MongoDB connection error:", error);
-        process.exit(1);
+        throw error;
     }
+    return cached.conn;
 };
-//# sourceMappingURL=db.js.map

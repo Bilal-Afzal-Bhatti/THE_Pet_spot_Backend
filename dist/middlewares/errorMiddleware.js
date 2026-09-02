@@ -48,4 +48,3 @@ export const errorHandler = (err, _req, res, _next) => {
         });
     }
 };
-//# sourceMappingURL=errorMiddleware.js.map

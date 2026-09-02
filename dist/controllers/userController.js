@@ -2,24 +2,22 @@ import { User } from "../models/userModel.js";
 import { AppError } from "../utils/AppError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { sendTokenResponse } from "../middlewares/authMiddleware.js";
-import { sendRegistrationEvent } from "../utils/kafka.js";
+import { sendOtpEvent } from "../utils/kafka.js";
+// 1. Register User & Send Verification OTP via Kafka
 export const register = asyncHandler(async (req, res) => {
     const { name, email, password, isPetParent } = req.body;
-    // 1. Validate basic input fields
     if (!name || !email || !password) {
         throw new AppError("Please provide all required fields", 400);
     }
-    // 2. Check for existing verified user
     const existingUser = await User.findOne({ email });
     if (existingUser && existingUser.isVerified) {
         throw new AppError("Email is already registered", 400);
     }
-    // 3. Generate 6-digit OTP and set expiration (10 minutes)
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+    const isNewUser = !existingUser;
     let user = existingUser;
     if (user) {
-        // Update pending unverified account with new OTP
         user.name = name;
         user.password = password;
         user.isPetParent = isPetParent;
@@ -28,7 +26,6 @@ export const register = asyncHandler(async (req, res) => {
         await user.save();
     }
     else {
-        // Create new unverified user record
         user = await User.create({
             name,
             email,
@@ -39,24 +36,24 @@ export const register = asyncHandler(async (req, res) => {
             isVerified: false,
         });
     }
-    // 4. Dispatch OTP payload via Kafka producer
+    // Dispatch OTP via clean helper (handles fallback internally)
     try {
-        await sendRegistrationEvent({
+        await sendOtpEvent({
             id: user._id.toString(),
             name: user.name,
             email: user.email,
             otp,
             type: "SEND_OTP",
+            isPetParent: String(user.isPetParent),
         });
     }
     catch (kafkaError) {
         console.error("Kafka OTP dispatch failed:", kafkaError);
-        // Rollback unverified user creation if message queue fails
-        await User.findByIdAndDelete(user._id);
-        // Express error handler will forward this to the frontend
+        if (isNewUser) {
+            await User.findByIdAndDelete(user._id);
+        }
         throw new AppError("The provided email is invalid or could not receive verification code.", 400);
     }
-    // 5. Send successful response to direct user to OTP page
     res.status(200).json({
         status: "success",
         message: "OTP sent successfully to your email.",
@@ -64,12 +61,12 @@ export const register = asyncHandler(async (req, res) => {
         redirectTo: "/verify-otp",
     });
 });
+// 2. Verify OTP
 export const verifyOtp = asyncHandler(async (req, res) => {
     const { email, otp } = req.body;
     if (!email || !otp) {
         throw new AppError("Email and OTP are required", 400);
     }
-    // Explicitly select OTP fields since select: false is set in schema
     const user = await User.findOne({ email }).select("+otp +otpExpires");
     if (!user) {
         throw new AppError("User not found", 404);
@@ -83,15 +80,13 @@ export const verifyOtp = asyncHandler(async (req, res) => {
     if (user.otpExpires && user.otpExpires < new Date()) {
         throw new AppError("Verification code has expired. Please sign up again", 400);
     }
-    // Mark user as verified and clear OTP credentials
     user.isVerified = true;
     user.set("otp", undefined);
     user.set("otpExpires", undefined);
     await user.save();
-    // Send JWT token & cookie login session response
     sendTokenResponse(user, 200, res, "Email verified successfully!");
 });
-// 2. Login
+// 3. Login
 export const login = asyncHandler(async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -103,7 +98,7 @@ export const login = asyncHandler(async (req, res) => {
     }
     sendTokenResponse(user, 200, res, "Login successful");
 });
-// 3. Logout
+// 4. Logout
 export const logout = asyncHandler(async (_req, res) => {
     res.cookie("jwt", "", {
         expires: new Date(0),
@@ -111,28 +106,66 @@ export const logout = asyncHandler(async (_req, res) => {
     });
     res.status(200).json({ message: "Logged out successfully" });
 });
-// 4. Check Auth / Get Current User (/me)
+// 5. Get Current User (/me)
 export const getMe = asyncHandler(async (req, res) => {
     res.status(200).json({ user: req.user });
 });
-// 5. Update Profile
+// 6. Update Profile
+// 5. Update Profile (Supports Name, Email, and Avatar Upload)
 export const updateProfile = asyncHandler(async (req, res) => {
-    const { name } = req.body;
-    const user = req.user;
-    if (name)
+    const authenticatedReq = req;
+    const { name, email } = req.body;
+    const user = await User.findById(authenticatedReq.user._id);
+    if (!user) {
+        throw new AppError("User not found", 404);
+    }
+    // Update name if provided
+    if (name) {
         user.name = name;
-    if (req.file)
-        user.avatar = `/uploads/${req.file.filename}`;
+    }
+    // Handle avatar upload (works for new uploads or updates)
+    if (authenticatedReq.file) {
+        user.avatar = `/uploads/${authenticatedReq.file.filename}`;
+    }
+    // Handle email update logic
+    let isEmailUpdated = false;
+    if (email && email !== user.email) {
+        const existingEmailUser = await User.findOne({ email });
+        if (existingEmailUser) {
+            throw new AppError("This email address is already in use by another account", 400);
+        }
+        user.email = email;
+        user.isVerified = false;
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        user.otp = otp;
+        user.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+        await sendOtpEvent({
+            id: user._id.toString(),
+            name: user.name,
+            email: user.email,
+            otp,
+            type: "SEND_OTP",
+        });
+        isEmailUpdated = true;
+    }
     await user.save();
-    res.status(200).json({ user, message: "Profile updated successfully" });
+    res.status(200).json({
+        status: "success",
+        message: isEmailUpdated
+            ? "Profile updated. Please verify your new email with the OTP sent."
+            : "Profile updated successfully",
+        user,
+        emailChanged: isEmailUpdated,
+    });
 });
-// 6. Change Password
+// 7. Change Password
 export const changePassword = asyncHandler(async (req, res) => {
+    const authenticatedReq = req;
     const { oldPassword, newPassword } = req.body;
     if (!oldPassword || !newPassword) {
         throw new AppError("Please provide both old and new passwords", 400);
     }
-    const user = await User.findById(req.user._id).select("+password");
+    const user = await User.findById(authenticatedReq.user._id).select("+password");
     if (!user || !(await user.comparePassword(oldPassword))) {
         throw new AppError("Incorrect old password", 400);
     }
@@ -140,7 +173,7 @@ export const changePassword = asyncHandler(async (req, res) => {
     await user.save();
     res.status(200).json({ message: "Password changed successfully" });
 });
-// 7. Forgot Password (OTP Generation)
+// 8. Forgot Password
 export const forgotPassword = asyncHandler(async (req, res) => {
     const { email } = req.body;
     if (!email)
@@ -150,13 +183,17 @@ export const forgotPassword = asyncHandler(async (req, res) => {
         throw new AppError("User not found with this email", 404);
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.resetOTP = otp;
-    user.resetOTPExpire = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+    user.resetOTPExpire = new Date(Date.now() + 10 * 60 * 1000);
     await user.save({ validateBeforeSave: false });
-    // Console log OTP for testing; configure Nodemailer for email sending in production
-    console.log(`🔑 Reset OTP for ${email}: ${otp}`);
+    await sendOtpEvent({
+        id: user._id.toString(),
+        email: user.email,
+        otp,
+        type: "FORGOT_PASSWORD_OTP",
+    });
     res.status(200).json({ message: "OTP sent to your email" });
 });
-// 8. Reset Password
+// 9. Reset Password
 export const resetPassword = asyncHandler(async (req, res) => {
     const { otp, newPassword } = req.body;
     if (!otp || !newPassword) {
@@ -170,10 +207,8 @@ export const resetPassword = asyncHandler(async (req, res) => {
         throw new AppError("OTP is invalid or has expired", 400);
     }
     user.password = newPassword;
-    // Replace lines 122-123 with:
     user.set("resetOTP", undefined);
     user.set("resetOTPExpire", undefined);
     await user.save();
     res.status(200).json({ message: "Password reset successful" });
 });
-//# sourceMappingURL=userController.js.map

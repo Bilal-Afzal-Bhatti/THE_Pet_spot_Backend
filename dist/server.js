@@ -1,3 +1,5 @@
+import dns from 'dns';
+dns.setServers(['8.8.8.8', '8.8.4.4']); // Forces Node to bypass local DNS blocks
 import dotenv from "dotenv";
 dotenv.config();
 import app from "./app.js";
@@ -11,6 +13,7 @@ const startServer = async () => {
         await initKafkaConsumer();
         app.listen(PORT, "0.0.0.0", () => {
             console.log(`🚀 Server running on http://localhost:${PORT}`);
+            console.log("Stripe Key Loaded:", process.env.STRIPE_SECRET_KEY ? "Yes" : "No");
         });
     }
     catch (error) {
@@ -19,4 +22,3 @@ const startServer = async () => {
     }
 };
 startServer();
-//# sourceMappingURL=server.js.map

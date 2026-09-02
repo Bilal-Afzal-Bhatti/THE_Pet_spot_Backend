@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document, Model } from "mongoose";
+import mongoose, { Schema } from "mongoose";
 import bcrypt from "bcryptjs";
 const userSchema = new Schema({
     name: { type: String, required: [true, "Name is required"], trim: true },
@@ -11,6 +11,7 @@ const userSchema = new Schema({
     },
     password: { type: String, required: [true, "Password is required"], select: false },
     isPetParent: { type: String, enum: ["Yes", "No", ""], default: "" },
+    role: { type: String, enum: ["user", "admin"], default: "user" },
     avatar: { type: String, default: "" },
     otp: { type: String, select: false },
     otpExpires: { type: Date, select: false },
@@ -24,10 +25,10 @@ userSchema.pre("save", async function () {
     this.password = await bcrypt.hash(this.password, 10);
 });
 userSchema.methods.comparePassword = async function (candidatePassword) {
-    if (!this.password) {
+    const user = this;
+    if (!user.password) {
         throw new Error("Password field not selected");
     }
-    return await bcrypt.compare(candidatePassword, this.password);
+    return await bcrypt.compare(candidatePassword, user.password);
 };
 export const User = mongoose.models.User || mongoose.model("User", userSchema);
-//# sourceMappingURL=userModel.js.map

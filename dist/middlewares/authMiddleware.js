@@ -18,9 +18,11 @@ export const sendTokenResponse = (user, statusCode, res, message) => {
     });
 };
 export const protect = asyncHandler(async (req, _res, next) => {
-    let token = req.cookies?.jwt;
-    if (!token && req.headers.authorization?.startsWith("Bearer")) {
-        token = req.headers.authorization.split(" ")[1];
+    // Cast to AuthenticatedRequest to safely attach user data
+    const authReq = req;
+    let token = authReq.cookies?.jwt;
+    if (!token && authReq.headers.authorization?.startsWith("Bearer")) {
+        token = authReq.headers.authorization.split(" ")[1];
     }
     if (!token) {
         throw new AppError("Not authorized, please log in", 401);
@@ -30,9 +32,8 @@ export const protect = asyncHandler(async (req, _res, next) => {
     if (!user) {
         throw new AppError("The user belonging to this token no longer exists", 401);
     }
-    req.user = user;
+    authReq.user = user;
     next();
 });
 // Alias export to satisfy routes importing authMiddleware
 export const authMiddleware = protect;
-//# sourceMappingURL=authMiddleware.js.map

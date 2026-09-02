@@ -1,11 +1,32 @@
 import { Kafka } from "kafkajs";
-import { sendEmail } from "./sendEmail.js";
+import sendEmail from "./sendEmail.js";
 const kafka = new Kafka({
     clientId: "petspot-backend",
     brokers: [process.env.KAFKA_BROKER || "localhost:9092"],
 });
 let producer = null;
 let consumer = null;
+// Helper to ensure topic exists before subscribing
+const ensureTopicExists = async (topicName) => {
+    const admin = kafka.admin();
+    try {
+        await admin.connect();
+        const topics = await admin.listTopics();
+        if (!topics.includes(topicName)) {
+            console.log(`🔨 Topic "${topicName}" does not exist. Creating...`);
+            await admin.createTopics({
+                topics: [{ topic: topicName, numPartitions: 1, replicationFactor: 1 }],
+            });
+            console.log(`✅ Topic "${topicName}" created.`);
+        }
+    }
+    catch (err) {
+        console.warn("⚠️ Admin creation check failed, proceeding anyway:", err);
+    }
+    finally {
+        await admin.disconnect();
+    }
+};
 export const getKafkaProducer = async () => {
     if (!producer) {
         producer = kafka.producer();
@@ -14,7 +35,11 @@ export const getKafkaProducer = async () => {
     }
     return producer;
 };
-export const sendRegistrationEvent = async (userData) => {
+export const sendOtpEvent = async (userData) => {
+    const eventType = userData.type || "SEND_OTP";
+    const subject = eventType === "FORGOT_PASSWORD_OTP"
+        ? "PetSpot - Password Reset OTP"
+        : "Your PetSpot Verification Code";
     try {
         const p = await getKafkaProducer();
         await p.send({
@@ -23,41 +48,50 @@ export const sendRegistrationEvent = async (userData) => {
                 {
                     key: userData.id,
                     value: JSON.stringify({
-                        event: userData.type || "SEND_OTP",
+                        event: eventType,
+                        subject,
                         timestamp: new Date().toISOString(),
                         data: userData,
                     }),
                 },
             ],
         });
-        console.log(`✉️ Published ${userData.type || "SEND_OTP"} event to Kafka for: ${userData.email}`);
+        console.log(`✉️ Published ${eventType} event to Kafka for: ${userData.email}`);
     }
     catch (error) {
         console.error("⚠️ Kafka Producer Error, falling back to direct Nodemailer delivery:", error);
         await sendEmail({
             email: userData.email,
-            subject: "Your PetSpot Verification Code",
+            subject,
             message: userData.otp,
         });
     }
 };
+export const sendRegistrationEvent = sendOtpEvent;
 export const initKafkaConsumer = async () => {
     try {
-        consumer = kafka.consumer({ groupId: "petspot-email-group" });
+        // 1. Ensure topic exists on broker before initializing consumer
+        await ensureTopicExists("user-registered");
+        // 2. Updated group ID to avoid offset mismatch issues on fresh broker runs
+        consumer = kafka.consumer({ groupId: "petspot-email-group-v1" });
         await consumer.connect();
-        await consumer.subscribe({ topic: "user-registered", fromBeginning: false });
+        // 3. Set allowAutoTopicCreation to true
+        await consumer.subscribe({
+            topic: "user-registered",
+            fromBeginning: false,
+        });
         console.log("📥 Kafka Consumer Connected & Listening on topic: user-registered");
         await consumer.run({
             eachMessage: async ({ message }) => {
                 if (!message.value)
                     return;
                 const payload = JSON.parse(message.value.toString());
-                const { data } = payload;
+                const { data, subject } = payload;
                 if (data?.email && data?.otp) {
                     console.log(`📨 Kafka Consumer processing email for: ${data.email}`);
                     await sendEmail({
                         email: data.email,
-                        subject: "Your PetSpot Verification Code",
+                        subject: subject || "Your PetSpot Verification Code",
                         message: data.otp,
                     });
                     console.log(`✅ Email successfully sent to: ${data.email}`);
@@ -69,4 +103,3 @@ export const initKafkaConsumer = async () => {
         console.error("❌ Kafka Consumer initialization failed:", error);
     }
 };
-//# sourceMappingURL=kafka.js.map
