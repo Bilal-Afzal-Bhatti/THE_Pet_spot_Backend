@@ -171,13 +171,18 @@ export const sendOrderConfirmationEvent = async (order: OrderConfirmationData) =
       ],
     });
     console.log(`📦 Published order confirmation event to Kafka for: ${order.customerInfo.email}`);
-  } catch (error) {
-    console.error("⚠️ Kafka Producer Error, falling back to direct Nodemailer delivery:", error);
-    await sendEmail({
-      email: order.customerInfo.email,
-      subject,
-      message: buildOrderEmailHtml(order),
-    });
+  } catch (error: any) {
+    console.error("⚠️ Kafka Producer Error, falling back to direct Nodemailer delivery:", error.message || error);
+    try {
+      await sendEmail({
+        email: order.customerInfo.email,
+        subject,
+        message: buildOrderEmailHtml(order),
+      });
+      console.log(`📧 Fallback Nodemailer successfully sent email to: ${order.customerInfo.email}`);
+    } catch (emailError: any) {
+      console.error("❌ Critical: Fallback Nodemailer also failed to send email:", emailError.message || emailError);
+    }
   }
 };
 

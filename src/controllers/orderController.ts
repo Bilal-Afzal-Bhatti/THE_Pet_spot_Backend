@@ -50,8 +50,7 @@ export const createCheckoutOrder = async (
 
     if (customerInfo.paymentMethod === "COD") {
       try {
-        // 👈 orderId is omitted here; Mongoose model default & pre-save hook handles it
-        const order = await Order.create({
+        const order: any = await Order.create({
           petId,
           title,
           price,
@@ -59,10 +58,17 @@ export const createCheckoutOrder = async (
           idempotencyKey,
           customerInfo,
           paymentStatus: "PENDING",
-          orderStatus: "PROCESSING",
+          orderStatus: "CONFIRMED", // COD orders are accepted immediately
         });
 
-        await sendOrderConfirmationEvent({ ...order.toObject(), _id: order._id.toString() });
+        // Send email/Kafka event and update emailSent flag in DB
+        if (!order.emailSent) {
+          await sendOrderConfirmationEvent({
+            ...order.toObject(),
+            _id: order._id.toString(),
+          });
+          await Order.findByIdAndUpdate(order._id, { emailSent: true });
+        }
 
         responsePayload = {
           success: true,
@@ -94,8 +100,6 @@ export const createCheckoutOrder = async (
         return res.status(400).json({ success: false, message: "Customer email is required for online payment." });
       }
 
-      // Create an empty placeholder order first or pass a temporary metadata reference
-      // Let's create the order first so Mongoose populates order.orderId for Stripe metadata
       let tempOrder;
       try {
         tempOrder = await Order.create({
@@ -112,8 +116,6 @@ export const createCheckoutOrder = async (
         if (dbError.code === 11000) {
           const existingOrder = await Order.findOne({ idempotencyKey });
           if (existingOrder) {
-            // If session already existed, we create/retrieve stripe session or handle accordingly
-            // For now, return existing payload
             responsePayload = { success: true, orderId: existingOrder.orderId };
             idempotencyCache.set(idempotencyKey, responsePayload);
             return res.status(200).json(responsePayload);
@@ -122,12 +124,14 @@ export const createCheckoutOrder = async (
         throw dbError;
       }
 
-      // Create Stripe Checkout Session using the model-generated orderId
+      // Create Stripe Checkout Session
       const session = await stripeInstance.checkout.sessions.create(
         {
           payment_method_types: ["card"],
           customer_email: customerInfo.email,
-          billing_address_collection: "required",
+          shipping_address_collection: {
+            allowed_countries: ["PK", "IN", "US", "GB", "CA"],
+          },
           line_items: [
             {
               price_data: {
@@ -149,7 +153,6 @@ export const createCheckoutOrder = async (
         { idempotencyKey: `stripe_${idempotencyKey}` }
       );
 
-      // Attach the stripe session ID to the already created order record
       tempOrder.stripeSessionId = session.id;
       await tempOrder.save();
 

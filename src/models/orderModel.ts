@@ -27,7 +27,7 @@ export interface IOrder extends Document {
     paymentMethod: "ONLINE" | "COD";
   };
   paymentStatus: "PENDING" | "PAID" | "FAILED";
-  orderStatus: "PROCESSING" | "COMPLETED" | "CANCELLED";
+  orderStatus: "PROCESSING" | "COMPLETED" | "CANCELLED" | "CONFIRMED";
   emailSent: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -63,7 +63,7 @@ const OrderSchema = new Schema(
     },
     orderStatus: {
       type: String,
-      enum: ["PROCESSING", "COMPLETED", "CANCELLED"],
+      enum: ["PROCESSING", "COMPLETED", "CANCELLED","CONFIRMED"],
       default: "PROCESSING",
     },
     emailSent: { type: Boolean, default: false },
