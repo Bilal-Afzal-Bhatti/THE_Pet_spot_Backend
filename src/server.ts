@@ -18,14 +18,16 @@ const PORT = Number(process.env.PORT) || 5000;
 // PRODUCTION MODE (Vercel Serverless)
 // ==========================================
 if (process.env.NODE_ENV === "production") {
-  // Connect to DB immediately for serverless warm starts
-  connectDB().catch((err) => console.error("❌ DB Connection Error:", err));
-  
+  // No connectDB() call needed here — app.ts now has middleware that
+  // awaits connectDB() before every request, so the connection is
+  // guaranteed before any route handler runs. This avoids the cold-start
+  // race condition that caused the findOne() buffering timeout.
+
   // ⚠️ Note: initKafkaConsumer() is intentionally skipped here.
   // Vercel serverless functions kill background processes instantly.
-  // If you need Kafka in production, it must be hosted on a persistent 
+  // If you need Kafka in production, it must be hosted on a persistent
   // server like Render, Railway, or AWS EC2.
-} 
+}
 // ==========================================
 // LOCAL DEVELOPMENT MODE (npm run dev)
 // ==========================================
@@ -34,7 +36,7 @@ else {
     try {
       // 1. Connect to Database
       await connectDB();
-      
+
       // 2. Connect Kafka consumer once MongoDB connects
       await initKafkaConsumer();
 

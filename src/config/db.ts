@@ -1,21 +1,47 @@
 import mongoose from "mongoose";
 
-let cachedDb: typeof mongoose | null = null;
+// ==========================================
+// MongoDB Connection (Serverless Safe)
+// ==========================================
+// Uses globalThis instead of a plain module-level variable because Vercel's
+// serverless runtime can reuse the same module instance across invocations
+// in ways that make a simple `let` unreliable — globalThis survives more
+// consistently across warm starts.
 
-export const connectDB = async () => {
-  if (cachedDb && mongoose.connection.readyState === 1) {
-    return cachedDb;
+let cached = (globalThis as any).mongoose;
+
+if (!cached) {
+  cached = (globalThis as any).mongoose = { conn: null, promise: null };
+}
+
+export async function connectDB() {
+  if (cached.conn && mongoose.connection.readyState === 1) {
+    return cached.conn;
   }
 
-  try {
-    const conn = await mongoose.connect(process.env.MONGO_URI as string, {
-      bufferCommands: false, // Disable Mongoose buffering
-    });
-    cachedDb = conn;
-    console.log("MongoDB Connected Successfully");
-    return cachedDb;
-  } catch (error) {
-    console.error("MongoDB Connection Error:", error);
-    throw error;
+  if (!cached.promise) {
+    if (!process.env.MONGO_URI) {
+      throw new Error("MONGO_URI is not defined in environment variables");
+    }
+
+    cached.promise = mongoose
+      .connect(process.env.MONGO_URI, {
+        bufferCommands: false,     // Disable Mongoose command buffering for serverless timeouts
+        connectTimeoutMS: 30000,   // Connection timeout threshold
+      })
+      .then((mongooseInstance) => {
+        console.log("MongoDB Connected Successfully");
+        return mongooseInstance;
+      })
+      .catch((err) => {
+        // Reset the cached promise on failure so the NEXT request retries
+        // the connection instead of being permanently stuck on a rejected promise.
+        console.error("MongoDB Connection Error:", err);
+        cached.promise = null;
+        throw err;
+      });
   }
-};
+
+  cached.conn = await cached.promise;
+  return cached.conn;
+}
