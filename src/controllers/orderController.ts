@@ -150,12 +150,9 @@ export const verifyAndCompleteOrder = async (req: Request, res: Response): Promi
     }
 
     const stripeInstance = getStripe();
-    
-    // Retrieve the checkout session from Stripe directly
     const session = await stripeInstance.checkout.sessions.retrieve(session_id as string);
 
     if (session.payment_status === "paid") {
-      // Find and update order status to PAID
       const orderFilter: any = {
         $or: [
           { stripeSessionId: session.id },
@@ -165,19 +162,28 @@ export const verifyAndCompleteOrder = async (req: Request, res: Response): Promi
 
       const updatedOrder = await Order.findOneAndUpdate(
         orderFilter,
-        { 
-          paymentStatus: "PAID", 
-          orderStatus: "CONFIRMED" 
-        },
+        { paymentStatus: "PAID", orderStatus: "CONFIRMED" },
         { new: true }
       );
 
       if (updatedOrder) {
         console.log(`✅ [Instant Verify API] Order ${updatedOrder.orderId} successfully marked as PAID.`);
-        return res.status(200).json({ 
-          success: true, 
-          message: "Payment verified and order status updated successfully.", 
-          order: updatedOrder 
+
+        // Only send the email if this is the FIRST time we're marking it PAID —
+        // otherwise both the webhook and this endpoint could each send a duplicate email
+        // if they both fire for the same order (a real race condition risk here).
+        if (updatedOrder.paymentStatus === "PAID" && !updatedOrder.emailSent) {
+          await sendOrderConfirmationEvent({
+            ...updatedOrder.toObject(),
+            _id: updatedOrder._id.toString(),
+          });
+          await Order.findByIdAndUpdate(updatedOrder._id, { emailSent: true });
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: "Payment verified and order status updated successfully.",
+          order: updatedOrder,
         });
       } else {
         console.warn(`⚠️ [Instant Verify API] Session is paid on Stripe, but order not found in DB for session: ${session.id}`);

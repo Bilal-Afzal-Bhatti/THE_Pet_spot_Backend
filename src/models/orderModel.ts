@@ -19,6 +19,7 @@ interface IOrder extends Document {
   };
   paymentStatus: "PENDING" | "PAID" | "FAILED";
   orderStatus: "PROCESSING" | "COMPLETED" | "CANCELLED";
+  emailSent: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -46,16 +47,17 @@ const OrderSchema = new Schema<IOrder>(
       postalCode: { type: String, default: "" },
       paymentMethod: { type: String, enum: ["ONLINE", "COD"], required: true },
     },
-    paymentStatus: {
-      type: String,
-      enum: ["PENDING", "PAID", "FAILED"],
-      default: "PENDING",
-    },
-    orderStatus: {
-      type: String,
-      enum: ["PROCESSING", "COMPLETED", "CANCELLED"],
-      default: "PROCESSING",
-    },
+  paymentStatus: {
+  type: String,
+  enum: ["PENDING", "PAID", "FAILED"],
+  default: "PENDING",
+},
+orderStatus: {
+  type: String,
+  enum: ["PROCESSING", "COMPLETED", "CANCELLED"],
+  default: "PROCESSING",
+},
+emailSent: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import Stripe from "stripe";
 import { Order } from "../models/orderModel.js";
+import { sendOrderConfirmationEvent } from "../utils/kafka.js";
 
 const getStripe = () => {
   const secretKey = process.env.STRIPE_SECRET_KEY;
@@ -28,15 +29,20 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
     try {
       const updatedOrder = await Order.findOneAndUpdate(
         { stripeSessionId: session.id },
-        { 
-          paymentStatus: "PAID", 
-          orderStatus: "CONFIRMED" 
+        {
+          paymentStatus: "PAID",
+          orderStatus: "CONFIRMED",
         },
         { new: true }
       );
 
       if (updatedOrder) {
         console.log(`✅ [Webhook] Order ${updatedOrder.orderId} successfully marked as PAID.`);
+        // Send the confirmation email now that payment is actually confirmed
+        await sendOrderConfirmationEvent({
+          ...updatedOrder.toObject(),
+          _id: updatedOrder._id.toString(),
+        });
       } else {
         console.warn(`⚠️ [Webhook] No order found for Stripe Session ID: ${session.id}`);
       }
