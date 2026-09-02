@@ -1,55 +1,55 @@
-import mongoose, { Schema, Document, Model } from "mongoose";
-import bcrypt from "bcryptjs";
+import { Schema, model, Document } from "mongoose";
 
 export interface IUser extends Document {
-  name: string;
-  email: string;
-  password?: string;
-  role?: "user" | "admin";
-  isPetParent?: string;
-  avatar?: string;
-  otp?: string;
-  otpExpires?: Date;
-  isVerified: boolean;
-  resetOTP?: string;
-  resetOTPExpire?: Date;
-  comparePassword(candidatePassword: string): Promise<boolean>;
+  orderId: string;
+  petId: string;
+  title: string;
+  price: number;
+  petImage?: string;
+  idempotencyKey: string;
+  stripeSessionId?: string;
+  customerInfo: {
+    fullName: string;
+    email: string;
+    phone: string;
+    address: string;
+    city: string;
+    postalCode: string;
+    paymentMethod: "ONLINE" | "COD";
+  };
+  paymentStatus: "PENDING" | "PAID" | "FAILED";
+  orderStatus: "PROCESSING" | "CONFIRMED" | "COMPLETED" | "CANCELLED";
+  createdAt: Date;
+  updatedAt: Date;
 }
-
-const userSchema = new Schema<IUser>(
-  {
-    name: { type: String, required: [true, "Name is required"], trim: true },
-    email: {
-      type: String,
-      required: [true, "Email is required"],
-      unique: true,
-      lowercase: true,
-      trim: true,
+const UserSchema = new Schema<IUser>({
+    orderId: { type: String, required: true, unique: true, index: true },
+    petId: { type: String, required: true },
+    title: { type: String, required: true },
+    price: { type: Number, required: true },
+    petImage: { type: String },
+    idempotencyKey: { type: String, required: true, unique: true, index: true },
+    stripeSessionId: { type: String, unique: true, sparse: true, index: true },
+    customerInfo: {
+      fullName: { type: String, required: true },
+      email: { type: String, required: true },
+      phone: { type: String, required: true },
+      address: { type: String, required: true },
+      city: { type: String, required: true },
+      postalCode: { type: String, default: "" },
+      paymentMethod: { type: String, enum: ["ONLINE", "COD"], required: true },
     },
-    password: { type: String, required: [true, "Password is required"], select: false },
-    isPetParent: { type: String, enum: ["Yes", "No", ""], default: "" },
-    role: { type: String, enum: ["user", "admin"], default: "user" },
-    avatar: { type: String, default: "" },
-    otp: { type: String, select: false },
-    otpExpires: { type: Date, select: false },
-    isVerified: { type: Boolean, default: false },
-    resetOTP: { type: String, select: false },
-    resetOTPExpire: { type: Date, select: false },
+    paymentStatus: {
+      type: String,
+      enum: ["PENDING", "PAID", "FAILED"],
+      default: "PENDING",
+    },
+    orderStatus: {
+      type: String,
+      enum: ["PROCESSING", "CONFIRMED", "COMPLETED", "CANCELLED"],
+      default: "PROCESSING",
+    },
   },
   { timestamps: true }
 );
-
-userSchema.pre<IUser>("save", async function () {
-  if (!this.isModified("password") || !this.password) return;
-  this.password = await bcrypt.hash(this.password, 10);
-});
-
-userSchema.methods.comparePassword = async function (candidatePassword: string): Promise<boolean> {
-  const user = this as IUser;
-  if (!user.password) {
-    throw new Error("Password field not selected");
-  }
-  return await bcrypt.compare(candidatePassword, user.password);
-};
-
-export const User = (mongoose.models.User as Model<IUser>) || mongoose.model<IUser>("User", userSchema);
+export const User = model<IUser>("User", UserSchema);

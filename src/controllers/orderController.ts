@@ -11,6 +11,13 @@ const getStripe = () => {
 
 const idempotencyCache = new Map<string, any>();
 
+// ✅ Unique Order ID generator combining timestamp and Math.random
+const generateUniqueOrderId = (): string => {
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const randomStr = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `ORD-${timestamp}-${randomStr}`;
+};
+
 interface CheckoutRequestBody {
   petId: string;
   title: string;
@@ -46,61 +53,77 @@ export const createCheckoutOrder = async (
       return res.status(400).json({ success: false, message: "Invalid payload details." });
     }
 
+    // ✅ Generate order ID upfront to guarantee it's never null
+    const orderId = generateUniqueOrderId();
+    if (!orderId) {
+      return res.status(500).json({ success: false, message: "Failed to generate order ID." });
+    }
+
     let responsePayload: any;
 
     if (customerInfo.paymentMethod === "COD") {
       const order = await Order.create({
+        orderId,
         petId,
         title,
         price,
-        petImage,
+        petImage: petImage || "",
         idempotencyKey,
         customerInfo,
         paymentStatus: "PENDING",
         orderStatus: "PROCESSING",
       });
 
-      // COD orders are confirmed immediately, no webhook involved
       await sendOrderConfirmationEvent({ ...order.toObject(), _id: order._id.toString() });
 
       responsePayload = {
         success: true,
         message: "COD order placed successfully.",
-        successUrl: `/orders/success?type=cod&petId=${petId}`,
+        orderId,
+        successUrl: `/orders/success?type=cod&orderId=${orderId}&petId=${petId}`,
       };
     } else {
       const stripeInstance = getStripe();
       const frontendUrl = process.env.CLIENT_URL || "https://the-pet-spot-pink.vercel.app";
 
+      if (!customerInfo?.email) {
+        return res.status(400).json({ success: false, message: "Customer email is required for online payment." });
+      }
+
+      // Create Stripe Checkout Session
       const session = await stripeInstance.checkout.sessions.create(
         {
           payment_method_types: ["card"],
+          customer_email: customerInfo.email,
+          billing_address_collection: "required",
           line_items: [
             {
               price_data: {
-                currency: "inr",
-                product_data: { name: title },
+                currency: "inr", // Update if using a different currency
+                product_data: { 
+                  name: title,
+                  images: petImage ? [petImage] : [],
+                },
                 unit_amount: Math.round(price * 100),
               },
               quantity: 1,
             },
           ],
           mode: "payment",
-          success_url: `${frontendUrl}/orders/success?session_id={CHECKOUT_SESSION_ID}`,
+          success_url: `${frontendUrl}/orders/success?session_id={CHECKOUT_SESSION_ID}&orderId=${orderId}`,
           cancel_url: `${frontendUrl}/pets/${petId}`,
-          metadata: { petId, customerName: customerInfo.fullName },
+          metadata: { petId, orderId, customerName: customerInfo.fullName },
         },
         { idempotencyKey: `stripe_${idempotencyKey}` }
       );
 
-      // Create the order BEFORE redirecting to Stripe, in PENDING state.
-      // The webhook will find and update this exact document by stripeSessionId
-      // once payment completes — it no longer needs to (and can't) create it from scratch.
+      // Save order to database with the generated orderId
       await Order.create({
+        orderId,
         petId,
         title,
         price,
-        petImage,
+        petImage: petImage || "",
         idempotencyKey,
         stripeSessionId: session.id,
         customerInfo,
@@ -108,13 +131,56 @@ export const createCheckoutOrder = async (
         orderStatus: "PROCESSING",
       });
 
-      responsePayload = { success: true, url: session.url };
+      responsePayload = { success: true, url: session.url, orderId };
     }
 
     idempotencyCache.set(idempotencyKey, responsePayload);
     return res.status(200).json(responsePayload);
   } catch (error: any) {
-    console.error("Checkout Controller Error:", error.message);
+    console.error("Checkout Controller Error:", error);
+    return res.status(500).json({ success: false, message: error.message || "Internal server error" });
+  }
+};
+export const verifyAndCompleteOrder = async (req: Request, res: Response): Promise<any> => {
+  try {
+    const { session_id, orderId } = req.query;
+
+    if (!session_id) {
+      return res.status(400).json({ success: false, message: "Missing session_id" });
+    }
+
+    const stripeInstance = getStripe();
+    
+    // Retrieve the checkout session from Stripe directly
+    const session = await stripeInstance.checkout.sessions.retrieve(session_id as string);
+
+    if (session.payment_status === "paid") {
+      // Find and update order status to PAID
+      const updatedOrder = await Order.findOneAndUpdate(
+        { $or: [{ stripeSessionId: session.id }, { orderId }] },
+        { 
+          paymentStatus: "PAID", 
+          orderStatus: "CONFIRMED" 
+        },
+        { new: true }
+      );
+
+      if (updatedOrder) {
+        console.log(`✅ [Instant Verify API] Order ${updatedOrder.orderId} successfully marked as PAID.`);
+        return res.status(200).json({ 
+          success: true, 
+          message: "Payment verified and order status updated successfully.", 
+          order: updatedOrder 
+        });
+      } else {
+        console.warn(`⚠️ [Instant Verify API] Session is paid on Stripe, but order not found in DB for session: ${session.id}`);
+        return res.status(404).json({ success: false, message: "Order record not found in database." });
+      }
+    } else {
+      return res.status(400).json({ success: false, message: "Payment has not been completed yet." });
+    }
+  } catch (error: any) {
+    console.error("Error verifying payment session:", error.message);
     return res.status(500).json({ success: false, message: error.message || "Internal server error" });
   }
 };
