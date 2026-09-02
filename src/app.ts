@@ -12,6 +12,7 @@ import userAdsRoutes from "./routes/userAdsRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
 import { handleStripeWebhook } from "./controllers/webhookController.js";
 import petSlugRoutes from "./routes/petSlugRoutes.js";
+import mongoose from "mongoose";
 const app: Application = express();
 
 // // 1. Security HTTP Headers (Configured to allow local uploads serving)
@@ -46,16 +47,69 @@ const limiter = rateLimit({
 app.use("/api", limiter);
 
 // 4. CORS & Cookie Parsing
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000"; // Default to localhost if not set
+// ==========================================
+// 1. CORS Configuration for ThePetSpot
+// ==========================================
+const allowedOrigins = [
+  "http://localhost:3000",                    // Next.js Local Frontend
+  "http://localhost:3001",                    // Local Admin Panel (if applicable)
+  "http://localhost:5000",                    // Local Backend fallback
+  "https://the-pet-spot-pink.vercel.app",     // Production Frontend (ThePetSpot)
+  "https://the-pet-spot-backend.vercel.app",  // Production Backend
+  "http://192.168.18.40:3000",                // Local Network Frontend IP access
+  "http://192.168.18.40:5000",                // Local Network Backend IP access
+];
 
-app.use(
-  cors({
-    origin: CLIENT_URL,
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"]
-  })
-);
+const corsOptions = {
+  origin: (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
+    // 1. Allow requests with no origin (like mobile apps, curl, or Postman)
+    if (!origin) return callback(null, true);
+
+    // 2. Check if origin is in our whitelist OR is a Vercel preview branch (e.g. *-git-*.vercel.app)
+    const isAllowed = allowedOrigins.includes(origin) || origin.endsWith(".vercel.app");
+
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      callback(new Error("CORS Policy: Access Denied"));
+    }
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Idempotency-Key"],
+  credentials: true, // Required for cookies, sessions, and authentication tokens
+  maxAge: 86400,     // Cache preflight response for 24 hours (Performance optimization)
+};
+
+// Apply CORS to your Express app
+app.use(cors(corsOptions));
+
+
+// ==========================================
+// 2. MongoDB Connection (Serverless Safe)
+// ==========================================
+let cached = (globalThis as any).mongoose;
+
+if (!cached) {
+  cached = (globalThis as any).mongoose = { conn: null, promise: null };
+}
+
+export async function connectDB() {
+  if (cached.conn) return cached.conn;
+
+  if (!cached.promise) {
+    if (!process.env.MONGO_URI) {
+      throw new Error("MONGO_URI is not defined in environment variables");
+    }
+
+    cached.promise = mongoose.connect(process.env.MONGO_URI, {
+      bufferCommands: false,         // Disables Mongoose command buffering for serverless timeouts
+      connectTimeoutMS: 30000,      // Connection timeout threshold
+    }).then((mongooseInstance) => mongooseInstance);
+  }
+
+  cached.conn = await cached.promise;
+  return cached.conn;
+}
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 app.use(cookieParser());
