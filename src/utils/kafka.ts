@@ -9,7 +9,9 @@ const kafka = new Kafka({
 let producer: Producer | null = null;
 let consumer: Consumer | null = null;
 
-// Helper to ensure topic exists before subscribing
+const ORDER_TOPIC = "order-confirmed";
+const OTP_TOPIC = "user-registered";
+
 const ensureTopicExists = async (topicName: string) => {
   const admin = kafka.admin();
   try {
@@ -51,16 +53,13 @@ export interface OtpEventData {
 
 export const sendOtpEvent = async (userData: OtpEventData) => {
   const eventType = userData.type || "SEND_OTP";
-  
-  const subject = eventType === "FORGOT_PASSWORD_OTP" 
-    ? "PetSpot - Password Reset OTP" 
-    : "Your PetSpot Verification Code";
+  const subject =
+    eventType === "FORGOT_PASSWORD_OTP" ? "PetSpot - Password Reset OTP" : "Your PetSpot Verification Code";
 
   try {
     const p = await getKafkaProducer();
-
     await p.send({
-      topic: "user-registered",
+      topic: OTP_TOPIC,
       messages: [
         {
           key: userData.id,
@@ -73,54 +72,111 @@ export const sendOtpEvent = async (userData: OtpEventData) => {
         },
       ],
     });
-
     console.log(`✉️ Published ${eventType} event to Kafka for: ${userData.email}`);
   } catch (error) {
     console.error("⚠️ Kafka Producer Error, falling back to direct Nodemailer delivery:", error);
-    await sendEmail({
-      email: userData.email,
-      subject,
-      message: userData.otp,
-    });
+    await sendEmail({ email: userData.email, subject, message: userData.otp });
   }
 };
 
 export const sendRegistrationEvent = sendOtpEvent;
 
+// ==========================================
+// Order confirmation email (new)
+// ==========================================
+export interface OrderConfirmationData {
+  _id: string;
+  petId: string;
+  title: string;
+  price: number;
+  petImage?: string;
+  customerInfo: {
+    fullName: string;
+    email: string;
+    phone: string;
+    address: string;
+    city: string;
+  };
+}
+
+const buildOrderEmailHtml = (order: OrderConfirmationData): string => `
+  <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+    <h2 style="color: #ea580c;">Thank you for your purchase, ${order.customerInfo.fullName}!</h2>
+    <p>Here are your order details:</p>
+    ${
+      order.petImage
+        ? `<img src="${order.petImage}" alt="${order.title}" style="width:100%; max-width:400px; border-radius:12px; margin: 12px 0;" />`
+        : ""
+    }
+    <table style="width:100%; border-collapse: collapse; margin-top: 12px;">
+      <tr><td style="padding:6px 0;"><strong>Pet:</strong></td><td>${order.title}</td></tr>
+      <tr><td style="padding:6px 0;"><strong>Price:</strong></td><td>PKR ${order.price}</td></tr>
+      <tr><td style="padding:6px 0;"><strong>Order ID:</strong></td><td>${order._id}</td></tr>
+      <tr><td style="padding:6px 0;"><strong>Delivery to:</strong></td><td>${order.customerInfo.address}, ${order.customerInfo.city}</td></tr>
+      <tr><td style="padding:6px 0;"><strong>Contact:</strong></td><td>${order.customerInfo.phone}</td></tr>
+    </table>
+    <p style="margin-top:20px; color:#666;">We'll be in touch with next steps shortly. Thanks for choosing PetSpot!</p>
+  </div>
+`;
+
+export const sendOrderConfirmationEvent = async (order: OrderConfirmationData) => {
+  const subject = `Your PetSpot Order Confirmation — ${order.title}`;
+
+  try {
+    const p = await getKafkaProducer();
+    await p.send({
+      topic: ORDER_TOPIC,
+      messages: [
+        {
+          key: order._id,
+          value: JSON.stringify({
+            event: "ORDER_CONFIRMED",
+            subject,
+            timestamp: new Date().toISOString(),
+            data: order,
+          }),
+        },
+      ],
+    });
+    console.log(`📦 Published order confirmation event to Kafka for: ${order.customerInfo.email}`);
+  } catch (error) {
+    console.error("⚠️ Kafka Producer Error, falling back to direct Nodemailer delivery:", error);
+    await sendEmail({
+      email: order.customerInfo.email,
+      subject,
+      message: buildOrderEmailHtml(order),
+    });
+  }
+};
+
 export const initKafkaConsumer = async () => {
   try {
-    // 1. Ensure topic exists on broker before initializing consumer
-    await ensureTopicExists("user-registered");
+    await ensureTopicExists(OTP_TOPIC);
+    await ensureTopicExists(ORDER_TOPIC);
 
-    // 2. Updated group ID to avoid offset mismatch issues on fresh broker runs
     consumer = kafka.consumer({ groupId: "petspot-email-group-v1" });
     await consumer.connect();
 
-    // 3. Set allowAutoTopicCreation to true
-    await consumer.subscribe({ 
-      topic: "user-registered", 
-      fromBeginning: false,
-    });
+    await consumer.subscribe({ topics: [OTP_TOPIC, ORDER_TOPIC], fromBeginning: false });
 
-    console.log("📥 Kafka Consumer Connected & Listening on topic: user-registered");
+    console.log(`📥 Kafka Consumer Connected & Listening on topics: ${OTP_TOPIC}, ${ORDER_TOPIC}`);
 
     await consumer.run({
-      eachMessage: async ({ message }) => {
+      eachMessage: async ({ topic, message }) => {
         if (!message.value) return;
-
         const payload = JSON.parse(message.value.toString());
-        const { data, subject } = payload;
+        const { data, subject, event } = payload;
 
-        if (data?.email && data?.otp) {
-          console.log(`📨 Kafka Consumer processing email for: ${data.email}`);
-
-          await sendEmail({
-            email: data.email,
-            subject: subject || "Your PetSpot Verification Code",
-            message: data.otp,
-          });
-
+        if (topic === OTP_TOPIC && data?.email && data?.otp) {
+          console.log(`📨 Kafka Consumer processing OTP email for: ${data.email}`);
+          await sendEmail({ email: data.email, subject: subject || "Your PetSpot Verification Code", message: data.otp });
           console.log(`✅ Email successfully sent to: ${data.email}`);
+        }
+
+        if (topic === ORDER_TOPIC && event === "ORDER_CONFIRMED" && data?.customerInfo?.email) {
+          console.log(`📨 Kafka Consumer processing order confirmation for: ${data.customerInfo.email}`);
+          await sendEmail({ email: data.customerInfo.email, subject, message: buildOrderEmailHtml(data) });
+          console.log(`✅ Order confirmation email sent to: ${data.customerInfo.email}`);
         }
       },
     });

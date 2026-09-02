@@ -33,6 +33,11 @@ app.set("trust proxy", 1);
 app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({ status: "OK", message: "Server is healthy" });
 });
+app.post(
+  "/api/webhooks/stripe",
+  express.raw({ type: "application/json" }),
+  handleStripeWebhook
+);
 
 // 5.5. Root welcome route
 app.get("/", (_req: Request, res: Response) => {

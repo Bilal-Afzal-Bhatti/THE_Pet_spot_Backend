@@ -4,9 +4,12 @@ interface IOrder extends Document {
   petId: string;
   title: string;
   price: number;
+  petImage?: string;
   idempotencyKey: string;
+  stripeSessionId?: string;
   customerInfo: {
     fullName: string;
+    email: string;
     phone: string;
     address: string;
     city: string;
@@ -24,9 +27,12 @@ const OrderSchema = new Schema<IOrder>(
     petId: { type: String, required: true },
     title: { type: String, required: true },
     price: { type: Number, required: true },
+    petImage: { type: String },
     idempotencyKey: { type: String, required: true, unique: true, index: true },
+    stripeSessionId: { type: String, unique: true, sparse: true, index: true },
     customerInfo: {
       fullName: { type: String, required: true },
+      email: { type: String, required: true },
       phone: { type: String, required: true },
       address: { type: String, required: true },
       city: { type: String, required: true },
@@ -44,9 +50,7 @@ const OrderSchema = new Schema<IOrder>(
       default: "PROCESSING",
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
 export const Order = model<IOrder>("Order", OrderSchema);
