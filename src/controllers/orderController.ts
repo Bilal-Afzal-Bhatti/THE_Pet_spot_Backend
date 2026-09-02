@@ -124,14 +124,11 @@ export const createCheckoutOrder = async (
         throw dbError;
       }
 
-      // Create Stripe Checkout Session
+      // Create Stripe Checkout Session (Shipping address collection removed)
       const session = await stripeInstance.checkout.sessions.create(
         {
           payment_method_types: ["card"],
           customer_email: customerInfo.email,
-          shipping_address_collection: {
-            allowed_countries: ["PK", "IN", "US", "GB", "CA"],
-          },
           line_items: [
             {
               price_data: {
