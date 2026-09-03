@@ -12,7 +12,9 @@ import userAdsRoutes from "./routes/userAdsRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
 import { handleStripeWebhook } from "./controllers/webhookController.js";
 import petSlugRoutes from "./routes/petSlugRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 import { connectDB } from "./config/db.js";
+import { seedDefaultAdmin } from "./models/adminModel.js";
 
 const app: Application = express();
 
@@ -68,9 +70,13 @@ app.use("/api", limiter);
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3001",
+  "http://localhost:3002",
+  "http://localhost:3003",
   "http://localhost:5000",
+  "http://localhost:5173",
   "https://the-pet-spot-pink.vercel.app",
   "https://the-pet-spot-backend.vercel.app",
+  "https://pet-spot-admin.vercel.app",
   "http://192.168.18.40:3000",
   "http://192.168.18.40:5000",
 ];
@@ -91,7 +97,7 @@ app.use(
       "Authorization",
       "Idempotency-Key", // <-- Crucial: Allows your custom header to pass through
     ],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods: ["GET","PATCH","POST", "PUT", "DELETE", "OPTIONS"],
   })
 );
 
@@ -99,9 +105,14 @@ app.use(
 // This was missing before — connectDB() was defined but never called
 // from within app.ts, so routes could run before Mongoose had connected,
 // causing the findOne() buffering timeout.
+let adminSeeded = false;
 app.use(async (_req: Request, res: Response, next) => {
   try {
     await connectDB();
+    if (!adminSeeded) {
+      await seedDefaultAdmin();
+      adminSeeded = true;
+    }
     next();
   } catch (err) {
     console.error("DB connection error:", err);
@@ -127,6 +138,7 @@ app.post(
   handleStripeWebhook
 );
 app.use("/api/pets", petSlugRoutes);
+app.use("/api/admin", adminRoutes);
 
 // 7. Catch-all Unhandled Routes (Express 5 wildcard syntax)
 app.all("{*path}", (req, _res, next) => {
