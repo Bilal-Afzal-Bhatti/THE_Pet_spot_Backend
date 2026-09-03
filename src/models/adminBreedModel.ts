@@ -5,12 +5,13 @@ export interface IAdminBreed extends Document {
   slug: string;
   category: "dog" | "cat" | "bird" | "other";
   origin?: string;
-  lifespan?: string;
+  maxlife?: string;
   temperament?: string[];
   weight?: string;
   height?: string;
   description?: string;
   careGuide?: string;
+  suitableFor?: string;
   image?: string;
   images?: string[];
   isPopular: boolean;
@@ -39,12 +40,13 @@ const adminBreedSchema = new Schema<IAdminBreed>(
       required: true,
     },
     origin: { type: String, default: "" },
-    lifespan: { type: String, default: "" },
+    maxlife: { type: String, default: "" },
     temperament: [{ type: String }],
     weight: { type: String, default: "" },
     height: { type: String, default: "" },
     description: { type: String, default: "" },
     careGuide: { type: String, default: "" },
+    suitableFor: { type: String, default: "" },
     image: { type: String, default: "" },
     images: [{ type: String }],
     isPopular: { type: Boolean, default: false },

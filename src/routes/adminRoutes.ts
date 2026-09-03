@@ -22,6 +22,7 @@ import {
   deleteAdminBlog,
   getAdminAds,
   getAdminAdById,
+  getsingleBlogBySlug,
   updateAdminAdStatus,
   deleteAdminAd,
   getAdminProducts,
@@ -30,6 +31,7 @@ import {
   deleteAdminProduct,
   getAdminUsers,
   getAdminUserById,
+  getBlogsByCategory,
   type AuthenticatedAdminRequest,
 } from "../controllers/adminController.js";
 
@@ -115,7 +117,9 @@ router.get("/blogs/:id", getAdminBlogById);
 router.post("/blogs", protectAdmin, upload.single("coverImage"), createAdminBlog);
 router.put("/blogs/:id", protectAdmin, upload.single("coverImage"), updateAdminBlog);
 router.delete("/blogs/:id", protectAdmin, deleteAdminBlog);
-
+// Route to fetch public blogs filtered by specific category (e.g. "dog-care" or "cat-care")
+router.get("/blogs/category/:category", getBlogsByCategory);
+router.get("/blogs/get-single/:slug", getsingleBlogBySlug);
 // ─────────────────────────────────────────────────────────────
 // USER ADS APPROVAL & MANAGEMENT ROUTES
 // ─────────────────────────────────────────────────────────────

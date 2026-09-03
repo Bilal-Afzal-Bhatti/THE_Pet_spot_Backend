@@ -264,12 +264,13 @@ export const createAdminBreed = asyncHandler(
       slug: body.slug || undefined,
       category: body.category || "dog",
       origin: body.origin || "",
-      lifespan: body.lifespan || "",
+      maxlife: body.maxlife || "",
       temperament: temperamentArr,
       weight: body.weight || "",
       height: body.height || "",
       description: body.description || "",
       careGuide: body.careGuide || "",
+      suitableFor: body.suitableFor || "",
       image: imageUrl,
       isPopular: body.isPopular === "true" || body.isPopular === true,
     });
@@ -309,11 +310,12 @@ export const updateAdminBreed = asyncHandler(
     if (body.slug) breed.slug = body.slug;
     if (body.category) breed.category = body.category;
     if (body.origin !== undefined) breed.origin = body.origin;
-    if (body.lifespan !== undefined) breed.lifespan = body.lifespan;
+    if (body.maxlife !== undefined) breed.maxlife = body.maxlife;
     if (body.weight !== undefined) breed.weight = body.weight;
     if (body.height !== undefined) breed.height = body.height;
     if (body.description !== undefined) breed.description = body.description;
     if (body.careGuide !== undefined) breed.careGuide = body.careGuide;
+    if (body.suitableFor !== undefined) breed.suitableFor = body.suitableFor; 
     if (body.isPopular !== undefined) {
       breed.isPopular = body.isPopular === "true" || body.isPopular === true;
     }
@@ -796,6 +798,63 @@ export const getAdminUserById = asyncHandler(
       user,
       ads,
       orders,
+    });
+  }
+);
+
+
+//FOR USERS TO GET BLOGS BY CATEGORY  
+export const getBlogsByCategory = asyncHandler(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const categoryName = req.params.category; // e.g., "dog-care", "cat-care"
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 12;
+    const skip = (page - 1) * limit;
+
+    const query: any = { 
+      category: categoryName,
+      isPublished: true // Usually public-facing pages only show published posts
+    };
+
+    if (req.query.search) {
+      query.title = { $regex: req.query.search as string, $options: "i" };
+    }
+
+    const total = await AdminBlogModel.countDocuments(query);
+    const blogs = await AdminBlogModel.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    res.status(200).json({
+      status: "success",
+      total,
+      page,
+      pages: Math.ceil(total / limit) || 1,
+      blogs,
+    });
+  }
+);
+
+
+export const getsingleBlogBySlug = asyncHandler(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const { slug } = req.params;
+
+    // Find the blog document by slug and ensure it is published (optional, remove if drafts should be viewable)
+    const blog = await AdminBlogModel.findOne({ slug });
+
+    if (!blog) {
+      res.status(404).json({
+        success: false,
+        message: "Blog post not found",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      blog,
     });
   }
 );
