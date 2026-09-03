@@ -11,6 +11,41 @@ const getStripe = () => {
 
 const idempotencyCache = new Map<string, any>();
 
+/**
+ * Resolve the frontend origin to redirect Stripe back to.
+ *
+ * Priority:
+ *  1. The request's Origin header (set by the browser on cross-origin
+ *     fetch/XHR calls) — this is the most reliable signal of "where did
+ *     this checkout actually start from" and automatically handles
+ *     local dev (http://localhost:3000) vs deployed (https://yourapp.vercel.app)
+ *     without ANY env var juggling.
+ *  2. The Referer header, as a fallback if Origin wasn't sent (some
+ *     browsers/proxies strip it on same-site navigations).
+ *  3. process.env.CLIENT_URL — last-resort static fallback, e.g. for
+ *     server-to-server calls with no browser origin at all.
+ *  4. http://localhost:3000 — absolute last resort for local dev.
+ *
+ * IMPORTANT: whatever origins you expect here (localhost + your vercel
+ * domain(s)) must also be whitelisted in your CORS config, or the
+ * browser will block the initial /api/orders/checkout request before
+ * we ever get to build this URL.
+ */
+const getFrontendUrl = (req: Request): string => {
+  const rawOrigin = (req.headers.origin as string) || (req.headers.referer as string) || "";
+
+  if (rawOrigin) {
+    try {
+      const parsed = new URL(rawOrigin);
+      return `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      // Malformed header — fall through to env/default below.
+    }
+  }
+
+  return process.env.CLIENT_URL || "http://localhost:3000";
+};
+
 interface CheckoutRequestBody {
   petId: string;
   title: string;
@@ -74,7 +109,7 @@ export const createCheckoutOrder = async (
           success: true,
           message: "COD order placed successfully.",
           orderId: order.orderId,
-          successUrl: `/orders/success?type=cod&orderId=${order.orderId}&petId=${petId}`,
+          successUrl: `/orders/success?type=cod`, // Clean relative URL — frontend prefixes its own origin
         };
       } catch (dbError: any) {
         if (dbError.code === 11000) {
@@ -84,7 +119,7 @@ export const createCheckoutOrder = async (
               success: true,
               message: "COD order already placed.",
               orderId: existingOrder.orderId,
-              successUrl: `/orders/success?type=cod&orderId=${existingOrder.orderId}&petId=${petId}`,
+              successUrl: `/orders/success?type=cod`,
             };
             idempotencyCache.set(idempotencyKey, responsePayload);
             return res.status(200).json(responsePayload);
@@ -94,7 +129,8 @@ export const createCheckoutOrder = async (
       }
     } else {
       const stripeInstance = getStripe();
-      const frontendUrl = process.env.CLIENT_URL || "https://the-pet-spot-pink.vercel.app";
+      // 👇 Derived from the request itself — local stays local, vercel stays vercel.
+      const frontendUrl = getFrontendUrl(req);
 
       if (!customerInfo?.email) {
         return res.status(400).json({ success: false, message: "Customer email is required for online payment." });
@@ -124,7 +160,8 @@ export const createCheckoutOrder = async (
         throw dbError;
       }
 
-      // Create Stripe Checkout Session (Shipping address collection removed)
+      // Create Stripe Checkout Session (success/cancel URLs point back to
+      // whichever frontend origin actually initiated this request)
       const session = await stripeInstance.checkout.sessions.create(
         {
           payment_method_types: ["card"],
@@ -133,7 +170,7 @@ export const createCheckoutOrder = async (
             {
               price_data: {
                 currency: "inr",
-                product_data: { 
+                product_data: {
                   name: title,
                   images: petImage ? [petImage] : [],
                 },
@@ -143,7 +180,7 @@ export const createCheckoutOrder = async (
             },
           ],
           mode: "payment",
-          success_url: `${frontendUrl}/orders/success?session_id={CHECKOUT_SESSION_ID}&orderId=${tempOrder.orderId}`,
+          success_url: `${frontendUrl}/orders/success?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${frontendUrl}/pets/${petId}`,
           metadata: { petId, orderId: tempOrder.orderId, customerName: customerInfo.fullName },
         },
@@ -166,7 +203,7 @@ export const createCheckoutOrder = async (
 
 export const verifyAndCompleteOrder = async (req: Request, res: Response): Promise<any> => {
   try {
-    const { session_id, orderId } = req.query;
+    const { session_id } = req.query; // session_id securely identifies the Stripe transaction
 
     if (!session_id) {
       return res.status(400).json({ success: false, message: "Missing session_id" });
@@ -177,10 +214,7 @@ export const verifyAndCompleteOrder = async (req: Request, res: Response): Promi
 
     if (session.payment_status === "paid") {
       const orderFilter: any = {
-        $or: [
-          { stripeSessionId: session.id },
-          ...(typeof orderId === "string" ? [{ orderId }] : []),
-        ],
+        stripeSessionId: session.id, // Match directly via Stripe Session ID safely
         paymentStatus: { $ne: "PAID" },
       };
 
@@ -208,10 +242,7 @@ export const verifyAndCompleteOrder = async (req: Request, res: Response): Promi
         });
       } else {
         const alreadyPaidOrder = await Order.findOne({
-          $or: [
-            { stripeSessionId: session.id },
-            ...(typeof orderId === "string" ? [{ orderId }] : []),
-          ],
+          stripeSessionId: session.id,
         });
 
         if (alreadyPaidOrder && alreadyPaidOrder.paymentStatus === "PAID") {

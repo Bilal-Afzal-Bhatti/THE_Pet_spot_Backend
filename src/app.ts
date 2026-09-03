@@ -75,23 +75,25 @@ const allowedOrigins = [
   "http://192.168.18.40:5000",
 ];
 
-const corsOptions = {
-  origin: (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
-    if (!origin) return callback(null, true);
-    const isAllowed = allowedOrigins.includes(origin) || origin.endsWith(".vercel.app");
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      callback(new Error("CORS Policy: Access Denied"));
-    }
-  },
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Idempotency-Key"],
-  credentials: true,
-  maxAge: 86400,
-};
-
-app.use(cors(corsOptions));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "Idempotency-Key", // <-- Crucial: Allows your custom header to pass through
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  })
+);
 
 // Gate every request below this point on a live DB connection.
 // This was missing before — connectDB() was defined but never called
