@@ -15,7 +15,7 @@ import petSlugRoutes from "./routes/petSlugRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import { connectDB } from "./config/db.js";
 import { seedDefaultAdmin } from "./models/adminModel.js";
-
+import breedPublicRoutes from "./routes/breedPublicRoutes.js";
 const app: Application = express();
 
 // 0. Trust Vercel's proxy — MUST be set before rate limiting, since
@@ -139,7 +139,8 @@ app.post(
 );
 app.use("/api/pets", petSlugRoutes);
 app.use("/api/admin", adminRoutes);
-
+// app.ts / server entry
+app.use("/api/breeds", breedPublicRoutes);
 // 7. Catch-all Unhandled Routes (Express 5 wildcard syntax)
 app.all("{*path}", (req, _res, next) => {
   next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
